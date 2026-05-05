@@ -1,0 +1,94 @@
+Storefront Proxy — Solution Summary
+=====================================
+
+## What exists today
+
+There's already a dispatcher/proxy system that routes admin requests to OrderCloud. It works by taking a Sitecore Identity token (an employee badge), checking what tenant/environment the user belongs to, and forwarding the request to the right OrderCloud region. The token itself doubles as the authorization — OrderCloud accepts it directly.
+
+This system intentionally blocks auth endpoints (login, registration) because admins authenticate through Sitecore Identity, not through OrderCloud directly.
+
+
+## What's needed
+
+SitecoreAI sites need to let shoppers (anonymous visitors and registered buyers) interact with OrderCloud — login, browse products, manage carts, place orders. These shoppers don't have a Sitecore Identity token. All they have is a Context ID, which is a public identifier already used by Sitecore rendering hosts.
+
+So the system needs a second path through the proxy that:
+- Works with a Context ID instead of an admin token
+- Enables auth endpoints (so buyers can log in and register)
+- Restricts access to only buyer-safe endpoints (no admin operations)
+- Figures out the right OrderCloud tenant and Client ID automatically from the Context ID alone
+
+
+## How it works, end to end
+
+Step 1 — New routes in the dispatcher.
+The dispatcher (traffic cop) gets new URL patterns: /storefront/* and /v1/storefront/*. These are separate from the existing /oc/* admin routes. When a request hits one of these, the dispatcher knows it's a shopper request and handles it differently.
+
+Step 2 — Context ID is required.
+Unlike the admin proxy (which can work without context), the storefront proxy demands a Context ID on every request. The dispatcher uses it to look up an "ordercloud" resource, which contains a tenant_id. No Context ID, no entry.
+
+Step 3 — Hand off to a new worker.
+The dispatcher forwards the request (with tenant info attached) to a brand-new Cloudflare Worker called sitecore.ep.proxy.storefront. This is a separate service from the existing admin proxy, so they deploy and evolve independently.
+
+Step 4 — The new worker looks up the full config.
+The storefront proxy takes the tenant_id and calls the Inventory API (an internal service that already knows about all OrderCloud tenants). The Inventory API returns everything needed: the OrderCloud base URL, marketplace ID, region, and — crucially — a SitecoreAI.ClientId (the buyer-facing API Client ID).
+
+Step 5 — Endpoint allowlist.
+The proxy only permits buyer-safe paths:
+- /v1/oauth/* — login, registration, anonymous tokens
+- /v1/me/* — buyer profile, product browsing, cart, orders
+
+Everything else (admin endpoints, user management, catalog management) is blocked.
+
+Step 6 — Client ID injection.
+For OAuth requests (login, anonymous token), if the shopper's request doesn't include a client_id, the proxy injects the SitecoreAI.ClientId it got from the Inventory API. This means a storefront can authenticate with just a Context ID — it never needs to know or expose the OrderCloud Client ID.
+
+Step 7 — Token handling for everything else.
+For non-auth requests, the shopper must provide their own OrderCloud access token (obtained in step 6). The proxy does a lightweight format check on the JWT but does not verify the signature — it lets OrderCloud be the final authority.
+
+Step 8 — Forward to OrderCloud.
+The proxy strips the /storefront/ prefix, builds the real OrderCloud URL, attaches the token, and sends the request through. The response comes back to the shopper.
+
+
+## How the Client ID gets there in the first place (Provisioning)
+
+Explicit provisioning (not dynamic discovery):
+- When a new SitecoreAI tenant is set up, the provisioning system creates a dedicated OrderCloud API Client configured for buyer use (anonymous access enabled, all buyers allowed).
+- The provisioning system writes that Client ID into the Inventory API as a SitecoreAI.ClientId annotation on the tenant record.
+- The Context Service gets a new "ordercloud" resource type that stores the tenant_id.
+- At runtime, the proxy just reads what's already there — no admin credentials needed, no API client listing, no auto-creation.
+
+
+## Error Handling
+
+These are defensive guards for when setup/config is wrong — not errors shoppers should ever see on a correctly-provisioned tenant.
+
+No Context ID on request:
+- Why: Frontend didn't attach the Context ID header. Misconfigured site, direct API call, or a bot.
+- Who: Frontend integration bug.
+
+Context has no "ordercloud" resource:
+- Why: The Context ID exists (set up for personalize, forms, etc.) but nobody added the ordercloud resource. OC wasn't wired in yet.
+- Who: Incomplete site setup.
+
+Tenant not found in Inventory API:
+- Why: The tenant_id points to a tenant that no longer exists — decommissioned, environment mismatch, or typo.
+- Who: Stale or wrong config.
+
+No SitecoreAI.ClientId annotation:
+- Why: Legacy tenant that predates this feature and hasn't been migrated, or provisioning partially failed (OC client created but annotation write-back didn't complete).
+- Who: Migration gap or partial provisioning failure.
+
+OrderCloud rejects the Client ID:
+- Why: Someone deleted/deactivated the API Client directly in OrderCloud without updating the Inventory API annotation.
+- Who: Out-of-band change in OrderCloud.
+
+Bottom line: For a fully-provisioned, correctly-configured tenant, shoppers hit zero errors. These guards give ops/platform teams clear, actionable messages when setup is wrong.
+
+
+## Deferred to later iterations
+
+- Auto-obtaining anonymous tokens — the browser manages its own token lifecycle
+- Rate limiting — start with OrderCloud's built-in limits, add Cloudflare limiting later if needed
+- Response caching — passthrough only for now
+- Multi-storefront per marketplace — one Client ID per marketplace initially; revisit if distinct buyer pools are needed

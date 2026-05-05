@@ -1,0 +1,557 @@
+This page outlines the current Envoy dispatcher/proxy setup and necessary changes to support an additional wildcard route for context ID-driven authentication in Sitecore OrderCloud Buyer Perspective API calls (authentication and shopping endpoints).
+
+Key differences between the existing dispatcher/proxy and the required support include:
+
+    Authentication methods
+
+        The current dispatcher/proxy uses Sitecore Identity tokens and tenant-specific roles for the OrderCloud marketplace to route requests to the correct Sitecore OrderCloud region/environment. It forwards the Sitecore Identity token as the Authorization bearer token, which OrderCloud accepts as a standard access token.
+
+        The new proxy for Buyer Perspective requests will not have access to a Sitecore Identity token. Tenant information must be extracted from the publicly available Sitecore Context ID used in Sitecore Rendering hosts for delivery/preview API requests.
+
+            After retrieving tenant information from the Sitecore Context ID, the API request can route to the correct Sitecore OrderCloud region/tenant.
+
+            The dispatcher/proxy should permit basic auth requests for login, registration, etc.
+
+            The Sitecore Context ID must also somehow map to a valid Buyer API Client to use for authentication, enabling Buyer sites to authenticate without providing a Sitecore OrderCloud Buyer Client ID. The system should derive and forward the correct Buyer Client ID based on the Sitecore Context ID.
+
+    Available proxy endpoints
+
+        The current dispatcher/proxy disables “auth” requests; the new dispatcher/proxy must enable them.
+
+        Endpoints used for administrative features will likely be disabled to focus the proxy on supporting shopping experiences in SitecoreAI sites.
+
+        Can the proxy support a separate wildcard base route for the shopper proxy API? Currently, the proxy serves /oc/* and /v1/oc/*. Is it possible to also support /storefront/* and /v1/storefront/* for this use case using the same dispatcher/proxy infrastructure?
+
+ 
+
+I provided the above as context to Opus 4.5 and gave it access to both the sitecore.ep.dispatcher and sitecore.ep.proxy.oc repositories to explore and told it to basically validate the viability of my suggested approach and create a rough implementation plan. Here it is:
+Plan: Storefront Proxy for SitecoreAI OrderCloud Buyer Access
+TL;DR
+
+Add a new wildcard route (/storefront/*, /v1/storefront/*) in the dispatcher that forwards buyer-perspective OrderCloud API requests to a new Cloudflare Worker (sitecore.ep.proxy.storefront). Authentication works via Sitecore Context ID → 'ordercloud' resource lookup → tenant_id → Inventory API to extract the SitecoreAI OrderCloud Client ID and OrderCloud config. The proxy enables OAuth endpoints for buyer login/registration, validates client-provided OC tokens, and enforces a strict buyer-endpoint allowlist.
+
+Key insight: The existing Inventory API already returns OrderCloud region, environment, and base URL for a given tenant. We propose adding a SitecoreAI.ClientId annotation to the tenant record during provisioning, avoiding runtime client discovery or creation.
+Phase 1: Dispatcher Changes (sitecore.ep.dispatcher)
+Steps
+
+    Add STOREFRONT_PROXY_ROUTES constant in src/constants.ts
+
+        Define routes: ['/v1/storefront/', '/storefront/'] with wildcard options
+
+        Pattern follows existing ORDER_CLOUD_PROXY_ROUTES definition
+
+    Create StorefrontProxyRouteHandler in src/handlers/storefront-proxy-route-handler.ts
+
+        Requires Context: Unlike current OC handler (allowNoContext: true), storefront must require context to lookup buyer client config
+
+        Extract 'ordercloud' resource from context: sitecoreContext.findResourceByType('ordercloud')
+
+        Validate resource exists and has required properties: buyer_client_id, marketplace_id, base_url, region
+
+        Attach OrderCloud config to RequestContract for downstream proxy
+
+        Call StorefrontProxyServiceBinding.fetch(req)
+
+    Register storefront routes in src/index.ts
+
+        Import STOREFRONT_PROXY_ROUTES and StorefrontProxyRouteHandler
+
+        Register with getCommonHandlers() (context required, no allowNoContext)
+
+        Service binding: StorefrontProxyServiceBinding
+
+    Add getResourceType mapping in src/helpers/worker-name.ts
+
+        Add: if (matchRoutes(STOREFRONT_PROXY_ROUTES(false), url)) return 'ordercloud';
+
+        Add service name mapping in getProxyWorkerName()
+
+    Update wrangler.toml configuration
+
+        Add service binding: { binding = "StorefrontProxyServiceBinding", service = "sitecore-ep-proxy-storefront" }
+
+        Add env var: STOREFRONT_PROXY_SERVICE_NAME = "sitecore-ep-proxy-storefront"
+
+Phase 2: New Storefront Proxy Worker (sitecore.ep.proxy.storefront)
+Steps
+
+    Scaffold new project sitecore.ep.proxy.storefront (parallel with step 5)
+
+        Copy structure from sitecore.ep.proxy.oc as template
+
+        Same dependencies: @sitecore-ep/lib, vitest, rollup, eslint
+
+        Update package.json name, wrangler.toml binding
+
+    Implement entry point src/index.ts
+
+        Parse RequestContract from dispatcher
+
+        Extract tenant_id from requestContract.context.ordercloudResource
+
+        Fetch full OrderCloud config via InventoryAPIClient.getTenantConfig(tenantId) (reuse pattern from sitecore.ep.proxy.oc)
+
+        Validate SitecoreAI.ClientId annotation exists; return 503 if missing
+
+        Health endpoint at /health
+
+        Route to createStorefrontProxyRequest()
+
+    Create storefront-specific request builder src/requests/create-storefront-proxy-request.ts
+
+        Extract OrderCloud path (remove /storefront/ prefix)
+
+        Endpoint allowlist (inverse of current blocklist):
+        ALLOWED_PREFIXES = [
+          '/v1/oauth',           // Auth enabled for buyers
+          '/v1/me',              // Buyer self-service
+          '/v1/me/products',     // Product browsing
+          '/v1/me/cart',         // Cart management
+          '/v1/me/orders',       // Order history/placement
+        ]
+
+        Block all admin endpoints not in allowlist
+
+        Build OrderCloud URL: {context.baseUrl}{orderCloudPath}
+
+    Implement token validation src/auth/token-validator.ts
+
+        Validate Authorization header present (except for /v1/oauth endpoints)
+
+        Decode JWT payload (base64, no signature verification)
+
+        Validate token has expected structure (cid, scope, exp claims)
+
+        Check expiration (optional, OC will reject expired tokens anyway)
+
+        Do NOT validate signature - let OrderCloud be source of truth
+
+    Add Buyer Client ID header injection (depends on step 8)
+
+        For OAuth endpoints (/v1/oauth/*):
+
+            If request doesn't include client_id in body, inject from context config
+
+            Supports anonymous token requests with just Context ID
+
+        For all other endpoints: pass Authorization header through
+
+    Create response handler src/responses/response-handler.ts
+
+        Wrap OrderCloud responses in ResponseContract
+
+        Track 500 errors to Analytics Engine
+
+        Log request metrics (marketplace, endpoint, status)
+
+    Add wrangler.toml configuration
+
+        Environment-specific URLs for each OC region
+
+        KV namespace for response caching (optional)
+
+        Analytics Engine binding for metrics
+
+Phase 3: Context Service Changes (External Dependency)
+Background: Existing Inventory API Infrastructure
+
+The current sitecore.ep.proxy.oc worker demonstrates a proven pattern for OrderCloud tenant discovery:
+Sitecore Tenant ID → Inventory API → OrderCloud Configuration
+
+Inventory API Response (from GET /api/inventory/v1/tenants/{tenantId}):
+{
+  id: string;                           // Sitecore tenant ID
+  annotations: {
+    URL: string;                        // OrderCloud API base URL (e.g., "https://api.ordercloud.io")
+    MarketplaceId: string;              // OrderCloud Marketplace ID
+  };
+  labels: {
+    Region: string;                     // e.g., "usw", "eu-west"
+    Environment: string;                // "sandbox", "staging", "production"
+    'OrderCloud.ApiInstance': string;   // API instance identifier
+    'OrderCloud.MarketplaceType': string;
+  };
+}
+
+This means region, environment, base_url, and marketplace_id are already discoverable via the tenant ID alone. The key question is how to handle the SitecoreAI OrderCloud Client ID for buyer authentication.
+Decision: SitecoreAI OrderCloud Client ID Configuration
+Option A: Explicit Provisioning (Recommended)
+
+Store the sitecoreai_client_id in the Inventory API tenant annotations during SitecoreAI tenant provisioning.
+
+Rationale:
+
+    The SitecoreAI OrderCloud Client ID has specific requirements:
+
+        Anonymous access enabled
+
+        "Allow All Buyers" access scope
+
+        Specific allowed grant types (client_credentials, password)
+
+    These requirements are best validated and enforced at provisioning time
+
+    Avoids runtime OC API calls for client discovery/creation
+
+    Provisioning system has the elevated credentials needed to create API clients
+
+Inventory API Schema Addition (annotations):
+annotations: {
+  URL: string;
+  MarketplaceId: string;
+  'SitecoreAI.ClientId': string;        // NEW: SitecoreAI OrderCloud Client ID
+  'SitecoreAI.ClientSecret'?: string;   // Optional: For server-to-server flows if needed later
+}
+
+Provisioning Workflow:
+
+    SitecoreAI tenant provisioning creates or links an OrderCloud marketplace
+
+    Provisioning creates a dedicated API Client in OrderCloud with:
+
+        AllowAnyBuyer: true
+
+        IsAnonBuyer: true
+
+        AccessTokenDuration: 600 (or configurable)
+
+        AllowedCorsDomains: ['*'] (or restricted to known domains)
+
+    Provisioning updates Inventory API with SitecoreAI.ClientId annotation
+
+    Client ID is available to the storefront proxy via existing Inventory API call
+
+Option B: Dynamic Discovery (Alternative)
+
+Store only the OrderCloud tenant ID; system authenticates to OC API at runtime to discover or create the SitecoreAI Client ID.
+
+Pros:
+
+    Minimal initial configuration
+
+    Self-healing if client is deleted
+
+Cons:
+
+    Requires proxy to have elevated OC credentials
+
+    First request latency for client discovery
+
+    "Auto-create" concern: Should a proxy create API clients? (User note: hesitant on this)
+
+    Discovery requires listing all API clients and filtering by naming convention
+
+If chosen, implementation:
+// Proxy would need to:
+1. Authenticate to OC with IntegrationAdmin credentials (stored as secrets)
+2. GET /v1/apiclients?search=SitecoreAI&pageSize=100
+3. Find client matching pattern: "SitecoreAI-{marketplaceId}" or similar
+4. Cache the client ID (KV, 24h TTL)
+5. If not found: return 503 "SitecoreAI Client not configured" (no auto-create)
+Steps
+
+    Define 'ordercloud' resource schema for Context Service (can start parallel with Phase 1-2)
+
+    Following the pattern of existing resources (personalize, forms, edge):
+
+    Resource type: ordercloud
+
+    Minimal Required Properties (leveraging Inventory API discovery):
+
+    PropertyTypeDescriptionSourcetenant_idstringSitecore tenant ID with OC productContext configuration
+
+    Derived at Runtime (via Inventory API /api/inventory/v1/tenants/{tenant_id}):
+
+    PropertyTypeDescriptionSourcemarketplace_idstringOrderCloud Marketplace IDannotations.MarketplaceIdbase_urlstringOrderCloud API base URLannotations.URLregionstringOrderCloud regionlabels.Regionenvironmentstringsandbox/staging/productionlabels.Environmentsitecoreai_client_idstringSitecoreAI OrderCloud Client IDannotations['SitecoreAI.ClientId']
+
+    Optional Properties (stored in Context resource):
+
+    PropertyTypeDefaultDescriptionanonymous_enabledbooleantrueAllow anonymous buyer token acquisitionallowed_catalogsstring[][]Restrict product visibility (empty = all)token_duration_overridenumbernullOverride default token duration (seconds)
+
+    Example Context Resource JSON:
+    {
+      "type": "ordercloud",
+      "properties": [
+        { "name": "tenant_id", "value": "oc-tenant-abc123" },
+        { "name": "anonymous_enabled", "value": "true" }
+      ]
+    }
+
+    Update Inventory API schema (Sitecore Platform team)
+
+    Add new annotation to OrderCloud tenant records:
+    annotations: {
+      URL: string;
+      MarketplaceId: string;
+      'SitecoreAI.ClientId': string;  // NEW: Required for storefront proxy
+    }
+
+    Migration path: Existing OC tenants need this field populated during upgrade or manually.
+
+    Update SitecoreAI tenant provisioning workflow
+
+    When provisioning a new SitecoreAI tenant with OrderCloud:
+
+        Create OrderCloud API Client via OC Admin API:
+        POST https://api.ordercloud.io/v1/apiclients
+        Authorization: Bearer {admin_token}
+
+        {
+          "AppName": "SitecoreAI-{marketplaceId}",
+          "AllowAnyBuyer": true,
+          "IsAnonBuyer": true,
+          "AccessTokenDuration": 600,
+          "RefreshTokenDuration": 43200,
+          "AllowedCorsDomains": ["*"]
+        }
+
+        Update Inventory API tenant record with new Client ID:
+        PATCH /api/inventory/v1/tenants/{tenantId}
+        {
+          "annotations": {
+            "SitecoreAI.ClientId": "{created_client_id}"
+          }
+        }
+
+        Store Client Secret (if needed for future server-side flows):
+
+            Option: Vault/Key Vault integration
+
+            Option: Additional Inventory annotation (encrypted)
+
+    Update Context service API to accept 'ordercloud' resource type
+
+        Add ordercloud to known resource types enum
+
+        Validate tenant_id property is present
+
+        Validate optional properties if provided
+
+        This is external to the dispatcher/proxy repos
+
+        Requires coordination with Context service team
+
+Proxy Runtime Flow (with Option A)
+sequenceDiagram
+    participant Client
+    participant Dispatcher
+    participant StorefrontProxy
+    participant InventoryAPI
+    participant OrderCloud
+
+    Client->>Dispatcher: POST /storefront/v1/oauth/token (Context-ID header)
+    Dispatcher->>Dispatcher: findResourceByType('ordercloud')
+    Dispatcher->>Dispatcher: Extract tenant_id from resource
+    Dispatcher->>StorefrontProxy: RequestContract (with tenant_id)
+    
+    StorefrontProxy->>InventoryAPI: GET /tenants/{tenant_id}
+    InventoryAPI-->>StorefrontProxy: {MarketplaceId, URL, SitecoreAI.ClientId}
+    
+    StorefrontProxy->>StorefrontProxy: Inject client_id into OAuth request
+    StorefrontProxy->>OrderCloud: POST /v1/oauth/token
+    OrderCloud-->>StorefrontProxy: {access_token, ...}
+    StorefrontProxy-->>Client: {access_token, ...}
+Error Scenarios
+
+Scenario
+	
+
+HTTP Status
+	
+
+Error Message
+
+Missing ordercloud resource in context
+	
+
+404
+	
+
+Context does not contain an ordercloud resource
+
+Missing tenant_id property
+	
+
+400
+	
+
+OrderCloud resource missing required property: tenant_id
+
+Tenant not found in Inventory API
+	
+
+404
+	
+
+OrderCloud tenant not found: {tenant_id}
+
+Missing SitecoreAI.ClientId annotation
+	
+
+503
+	
+
+SitecoreAI OrderCloud Client not configured for tenant
+
+Invalid OC Client ID (OC returns 400)
+	
+
+502
+	
+
+OrderCloud authentication failed: invalid client
+Phase 4: Testing & Deployment
+Steps
+
+    Unit tests for dispatcher handler src/handlers/storefront-proxy-route-handler.test.ts
+
+        Test context required (403 on missing context)
+
+        Test ordercloud resource required (404 on missing resource)
+
+        Test property extraction
+
+        Test route matching for /storefront/* and /v1/storefront/*
+
+    Unit tests for storefront proxy (parallel with step 15)
+
+        Test endpoint allowlist enforcement
+
+        Test token validation (valid, expired, malformed)
+
+        Test OAuth requests (with/without client_id)
+
+        Test RequestContract parsing
+
+    Integration tests tests/storefront/
+
+        End-to-end flow with mock OrderCloud
+
+        Anonymous token acquisition via Context ID only
+
+        Authenticated buyer requests
+
+        Cart/order operations
+
+    Deploy to staging environment
+
+        Deploy new sitecore.ep.proxy.storefront worker
+
+        Update dispatcher with storefront routes
+
+        Add test Context with 'ordercloud' resource
+
+    Production rollout
+
+        Feature flag for gradual rollout (STOREFRONT_PROXY_ENABLED)
+
+        Monitor error rates in Analytics Engine
+
+        Full enablement after validation
+
+Relevant Files
+Dispatcher (sitecore.ep.dispatcher)
+
+    src/constants.ts — Add STOREFRONT_PROXY_ROUTES
+
+    src/index.ts — Register routes with handler chain
+
+    src/handlers/ — New StorefrontProxyRouteHandler
+
+    src/helpers/worker-name.ts — Add service name mapping
+
+    wrangler.toml — Add service binding
+
+New Proxy (sitecore.ep.proxy.storefront)
+
+    src/index.ts — Worker entry point
+
+    src/requests/create-storefront-proxy-request.ts — Request builder with allowlist
+
+    src/auth/token-validator.ts — OC token validation
+
+    src/config/inventory-api-client.ts — Copy/extend from sitecore.ep.proxy.oc (adds SitecoreAI.ClientId extraction)
+
+    wrangler.toml — Worker configuration
+
+Reference Implementation
+
+    src/handlers/forms-proxy-route-handler.ts — Pattern for findResourceByType() usage
+
+    sitecore.ep.proxy.oc/src/requests/create-proxy-request.ts — Pattern for request building and endpoint filtering
+
+    sitecore.ep.proxy.oc/src/config/inventory-api-client.ts — Pattern for Inventory API integration and caching
+
+    sitecore.ep.proxy.oc/src/types/ordercloud.types.ts — Types for InventoryTenantResponse, extend for SitecoreAI fields
+
+Verification
+
+    Unit test coverage — All new handlers/functions have test files with >80% coverage
+
+    Route matching validation — Verify /storefront/v1/me/products and /v1/storefront/v1/me/products both route correctly
+
+    Endpoint blocklist — Confirm admin endpoints return 403/404
+
+    OAuth flow — Test anonymous token acquisition with only Context ID
+
+    Token passthrough — Verify authenticated requests reach OC with original token
+
+    Error handling — Test missing context, missing resource, invalid token scenarios
+
+    Metrics — Confirm Analytics Engine receives request/error events
+
+Decisions
+
+    New worker vs extending existing: New sitecore.ep.proxy.storefront worker for clean separation of auth logic and independent deployment
+
+    Context required: Storefront routes require Context ID (unlike current /oc/* which allows no context)
+
+    Token ownership: Client manages OC tokens; proxy validates format, OC validates authenticity
+
+    Endpoint allowlist: Strict buyer-only endpoints; admin endpoints blocked at proxy
+
+    OrderCloud resource type: Minimal context resource with just tenant_id; other config derived from Inventory API
+
+    SitecoreAI OrderCloud Client ID: Created during tenant provisioning, stored as SitecoreAI.ClientId annotation in Inventory API (Option A). Rationale:
+
+        Provisioning has the elevated credentials to create OC API Clients
+
+        Validates client requirements (anonymous access, allow all buyers) at setup time
+
+        Avoids proxy needing OC admin credentials or auto-creation logic
+
+        Consistent with existing Inventory API pattern for tenant configuration
+
+    No auto-create for Client ID: If SitecoreAI.ClientId is missing, return 503 rather than attempting to create one dynamically
+
+Further Considerations
+
+    Anonymous buyer session initialization — Should the proxy auto-obtain an anonymous token if none provided (using stored Buyer Client ID)? Recommendation: No, keep client responsible for token lifecycle to maintain session state (cart persistence).
+
+    Rate limiting — Should storefront proxy implement its own rate limiting, or rely on OrderCloud? Recommendation: Start with OC limits; add Cloudflare rate limiting later if needed for DDoS protection.
+
+    Caching — Should product catalog responses be cached at the proxy level? Recommendation: Defer to v2; start with passthrough only.
+
+    Migration for existing OrderCloud tenants — Existing tenants in the Inventory API won't have the SitecoreAI.ClientId annotation. Options:
+
+        Manual migration: Platform team runs script to create OC clients and update annotations
+
+        Portal self-service: Add UI in Platform Portal for customers to trigger client creation
+
+        Graceful degradation: If annotation missing, proxy returns 503 with actionable error message pointing to setup docs
+
+    Recommendation: Graceful degradation initially; add Portal self-service for GA.
+
+    SitecoreAI Client ID naming convention — Use consistent naming for discoverability and potential future tooling:
+
+        Pattern: SitecoreAI-Storefront-{marketplaceId}
+
+        Allows admin scripts to identify SitecoreAI-managed clients
+
+    Multi-storefront scenarios — A single OrderCloud marketplace might power multiple storefronts (e.g., B2C and B2B sites). Options:
+
+        One SitecoreAI Client per marketplace (shared across storefronts)
+
+        Multiple SitecoreAI Clients per marketplace (one per Context)
+
+    Recommendation: Start with one client per marketplace; evaluate multi-client if distinct buyer pools needed.

@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/.npm/
+/.npm-cache/
 /.pnp
 .pnp.*
 .yarn/*
@@ -28,6 +30,8 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+server.log
+startup.log
 
 # local env files
 .env*.local
@@ -38,3 +42,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+*.cts
