@@ -30,7 +30,7 @@ export async function resolveOcPromotion(
     const percentMatch = promo.ValueExpression?.match(
       /\*\s*([\d.]+)/,
     );
-    const percentOff = percentMatch
+    const percentOff = percentMatch && percentMatch[1]
       ? parseFloat(percentMatch[1]) * 100
       : 0;
 
