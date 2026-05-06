@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
+import { resolveOcPromotion } from "@/lib/ordercloud-promotions";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
@@ -12,27 +13,11 @@ interface CartItemPayload {
 }
 
 // -----------------------------------------------------------------
-// Path B: Server-side promo resolution (simulates OrderCloud promos)
-// In production, this would call the OC Promotions API to validate
-// eligibility and return the discount. Here we hardcode a registry.
+// Path B: Server-side promo resolution via OrderCloud Promotions API
+// The middleware calls OC to validate eligibility and returns the
+// discount percentage. The discounted price is baked into Stripe's
+// unit_amount so Stripe just sees final prices.
 // -----------------------------------------------------------------
-interface Promotion {
-  code: string;
-  description: string;
-  percentOff: number;
-}
-
-const OC_PROMOTIONS: Record<string, Promotion> = {
-  OC20OFF: {
-    code: "OC20OFF",
-    description: "OrderCloud Discount",
-    percentOff: 20,
-  },
-};
-
-function resolvePromotion(code: string): Promotion | null {
-  return OC_PROMOTIONS[code.toUpperCase()] ?? null;
-}
 
 export default async function handler(
   req: NextApiRequest,
@@ -50,8 +35,8 @@ export default async function handler(
       promoCode?: string;
     };
 
-    // Resolve the promo server-side (simulates OC promo evaluation)
-    const promotion = promoCode ? resolvePromotion(promoCode) : null;
+    // Resolve the promo via OrderCloud Promotions API
+    const promotion = promoCode ? await resolveOcPromotion(promoCode) : null;
 
     // Build line items — apply discount to unit_amount if promo resolved
     const baseItems = items && items.length > 0
@@ -77,6 +62,9 @@ export default async function handler(
             unit_amount: unitAmount,
             product_data: {
               name: item.name,
+              metadata: {
+                ocProductId: item.id,
+              },
               ...(promotion && {
                 description: `${promotion.percentOff}% off applied (${promotion.description})`,
               }),
