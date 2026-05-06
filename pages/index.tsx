@@ -54,6 +54,7 @@ export default function Home() {
     <>
       <Head>
         <title>Stripe Hosted Checkout — PoC</title>
+        <link rel="icon" href="/nolo-icon.svg" type="image/svg+xml" />
       </Head>
 
       <div className="min-h-screen bg-body-bg text-foreground">
