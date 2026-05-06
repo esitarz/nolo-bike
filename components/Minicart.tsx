@@ -177,7 +177,7 @@ export function Minicart() {
                     <Input
                       value={promoCode}
                       onChange={(e) => setPromoCode(e.target.value)}
-                      placeholder="e.g. OC20OFF"
+                      placeholder="e.g. OC451"
                       className="h-9 text-sm"
                       onKeyDown={(e) => e.key === "Enter" && applyPromo()}
                     />
@@ -194,7 +194,7 @@ export function Minicart() {
                     <p className="text-xs text-destructive">{promoError}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Try <code className="font-mono bg-subtle-bg px-1 rounded">OC20OFF</code> or leave empty to enter a code on Stripe&apos;s page
+                    Try <code className="font-mono bg-subtle-bg px-1 rounded">OC451</code> (45.1% off via OrderCloud) or leave empty for Stripe-native codes
                   </p>
                 </div>
               )}
