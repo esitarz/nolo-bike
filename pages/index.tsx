@@ -14,7 +14,7 @@ const flowSteps = [
     step: "1",
     title: "Initiate Session",
     description:
-      "Server creates a Stripe Checkout Session with line items, shipping, and metadata.",
+      "Server decodes the OC JWT for the active order ID, fetches line items from that order, and creates a Stripe Checkout Session with authoritative pricing.",
     tech: "POST /api/stripe/create-checkout-session",
   },
   {
@@ -217,10 +217,10 @@ export default function Home() {
           <div className="flex flex-col gap-4">
             {[
               {
-                item: "Checkout Session creation (server-side)",
+                item: "Checkout Session creation (server-side, OC order-driven)",
                 done: true,
                 detail:
-                  "Next.js API route creates a Stripe Checkout Session with line items, pricing, and OC product metadata.",
+                  "Server decodes the OC access token JWT to extract the active order ID, fetches line items from that order via LineItems.List(), and creates a Stripe Checkout Session. OC is the single pricing authority — client sends no prices.",
               },
               {
                 item: "Redirect to Stripe Hosted Checkout",
@@ -368,15 +368,15 @@ export default function Home() {
               },
               {
                 question: "How does the checkout session get real product data from OrderCloud?",
-                status: "open",
+                status: "answered",
                 answer:
-                  "Currently using hardcoded product data. Needs integration with the Content SDK / OC catalog workstream to pass real line items.",
+                  "Demonstrated. The server decodes the OC JWT to get the active order ID (from the 'orderid' claim or by querying Me.ListOrders for Unsubmitted orders), then calls LineItems.List() to fetch authoritative pricing. The client sends no product data or prices.",
               },
               {
                 question: "How does order fulfillment flow back to OrderCloud after payment?",
-                status: "open",
+                status: "answered",
                 answer:
-                  "The webhook receives checkout.session.completed — but we still need to define the OC order submission and fulfillment API calls triggered by that event.",
+                  "Demonstrated. On checkout.session.completed, the webhook creates an OC order, adds line items with Stripe-charged price override (OverrideUnitPrice), submits the order, and records a payment — with idempotency via xp.stripeSessionId.",
               },
               {
                 question: "How does shopper authentication (anonymous vs registered) affect the checkout session?",
