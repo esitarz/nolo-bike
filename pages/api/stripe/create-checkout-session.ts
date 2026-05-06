@@ -27,6 +27,12 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Validate required env vars
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.error("[create-checkout-session] STRIPE_SECRET_KEY not set");
+    return res.status(500).json({ error: "Server misconfiguration: STRIPE_SECRET_KEY" });
+  }
+
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
   try {
@@ -103,7 +109,11 @@ export default async function handler(
     return res.status(200).json({ sessionId: session.id, url: session.url });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[create-checkout-session]", message);
-    return res.status(500).json({ error: "Failed to create checkout session" });
+    console.error("[create-checkout-session] Error:", message);
+    console.error("[create-checkout-session] Stack:", err);
+    return res.status(500).json({ 
+      error: "Failed to create checkout session",
+      details: message,
+    });
   }
 }
