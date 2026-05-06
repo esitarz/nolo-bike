@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCart } from "@/context/cart";
 import {
   Sheet,
@@ -39,6 +39,17 @@ export function Minicart() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const drawerWidth = "min(75vw, 24rem)";
+    document.body.style.transition = "padding-right 300ms ease-in-out";
+    document.body.style.paddingRight = isOpen ? drawerWidth : "0px";
+
+    return () => {
+      document.body.style.paddingRight = "0px";
+      document.body.style.transition = "";
+    };
+  }, [isOpen]);
+
   async function handleCheckout() {
     if (items.length === 0) return;
     setLoading(true);
@@ -69,8 +80,12 @@ export function Minicart() {
   }
 
   return (
-    <Sheet open={isOpen} onOpenChange={(open) => !open && closeCart()}>
-      <SheetContent side="right" className="flex flex-col">
+    <Sheet modal={false} open={isOpen} onOpenChange={(open) => !open && closeCart()}>
+      <SheetContent
+        side="right"
+        className="flex flex-col border-l border-border"
+        onInteractOutside={(event) => event.preventDefault()}
+      >
         <SheetHeader>
           <SheetTitle>Your Cart</SheetTitle>
           <SheetDescription>
@@ -88,7 +103,7 @@ export function Minicart() {
                 <img
                   src={item.image}
                   alt={item.name}
-                  className="w-16 h-16 object-cover rounded bg-white flex-shrink-0"
+                  className="w-16 h-16 object-cover rounded bg-white shrink-0"
                 />
               )}
               <div className="flex-1 min-w-0">
