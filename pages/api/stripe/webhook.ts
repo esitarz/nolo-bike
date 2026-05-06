@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
+import { fulfillOrder } from "@/lib/ordercloud-fulfillment";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
@@ -45,19 +46,37 @@ export default async function handler(
     return res.status(400).json({ error: `Webhook error: ${message}` });
   }
 
-  // Idempotency: log the event id so you can guard against duplicates later.
   console.log("[webhook] Received event:", event.id, event.type);
 
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
-      console.log("[webhook] Payment completed:", {
-        sessionId: session.id,
-        paymentIntent: session.payment_intent,
-        orderId: session.metadata?.orderId,
-        amountTotal: session.amount_total,
+
+      // Expand line_items and their products (to get metadata with OC product IDs)
+      const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
+        expand: ["line_items.data.price.product"],
       });
-      // TODO: mark your order as paid and record session.payment_intent
+
+      console.log("[webhook] Payment completed:", {
+        sessionId: fullSession.id,
+        paymentIntent: fullSession.payment_intent,
+        amountTotal: fullSession.amount_total,
+      });
+
+      // Fulfill in OrderCloud
+      try {
+        const result = await fulfillOrder(fullSession);
+        console.log("[webhook] OC fulfillment success:", result);
+      } catch (err) {
+        // Don't fail the webhook — log for manual reconciliation
+        const message = err instanceof Error ? err.message : "Unknown error";
+        console.error("[webhook] OC fulfillment FAILED:", message);
+        console.error(
+          "[webhook] Session needs manual fulfillment:",
+          fullSession.id,
+        );
+      }
+
       break;
     }
     default:
