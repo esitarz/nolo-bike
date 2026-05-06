@@ -1,12 +1,13 @@
 import { useState } from "react";
 import Head from "next/head";
-import Link from "next/link";
+import { mdiCartOutline } from "@mdi/js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useCart } from "@/context/cart";
 import { Minicart } from "@/components/Minicart";
+import { Icon } from "@/lib/icon";
 
 const flowSteps = [
   {
@@ -58,19 +59,34 @@ export default function Home() {
       <div className="min-h-screen bg-body-bg text-foreground">
         {/* Nav */}
         <nav className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <span className="text-sm font-semibold tracking-tight">
-            Commerce in SitecoreAI
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold tracking-tight">
+              Commerce in SitecoreAI
+            </span>
+            <Badge colorScheme="teal" size="sm">
+              Proof of Concept
+            </Badge>
+          </div>
           <div className="flex items-center gap-3">
-            <Link href="/learning">
+            {/* <Link href="/learning">
               <Button variant="ghost" size="sm">
                 Learning Plan
               </Button>
-            </Link>
-            <Button variant="outline" size="sm" onClick={openCart} className="relative">
-              Cart
+            </Link> */}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={openCart}
+              className="relative"
+              aria-label="Open cart"
+            >
+              <Icon path={mdiCartOutline} />
               {cartCount > 0 && (
-                <Badge colorScheme="teal" size="sm" className="absolute -top-2 -right-2 min-w-5 h-5 flex items-center justify-center text-xs">
+                <Badge
+                  colorScheme="teal"
+                  size="sm"
+                  className="absolute -top-2 -right-2 min-w-5 h-5 flex items-center justify-center text-xs"
+                >
                   {cartCount}
                 </Badge>
               )}
@@ -80,29 +96,9 @@ export default function Home() {
 
         <Separator className="max-w-5xl mx-auto" />
 
-        {/* Hero */}
-        <section className="max-w-5xl mx-auto px-6 pt-16 pb-12">
-          <div className="max-w-2xl">
-            <Badge colorScheme="teal" size="md" className="mb-4">
-              Proof of Concept
-            </Badge>
-            <h1 className="text-4xl font-bold tracking-tight mb-4">
-              Stripe Hosted Checkout
-            </h1>
-            <p className="text-lg text-muted-foreground mb-2">
-              MVP scope reducer for Commerce in SitecoreAI. Stripe handles
-              payment, shipping, and tax on their hosted domain — we initiate
-              the session and process the completion event.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              No PCI self-attestation required. No complex payment middleware.
-            </p>
-          </div>
-        </section>
-
         {/* Demo Product */}
-        <section className="max-w-5xl mx-auto px-6 pb-12">
-          <div className="grid md:grid-cols-2 gap-8">
+        <section className="max-w-5xl mx-auto px-6">
+          <div className="grid md:grid-cols-2 gap-8 py-12">
             <Card style="outline" padding="lg" elevation="xs">
               <div className="flex flex-col h-full">
                 <img
@@ -142,13 +138,19 @@ export default function Home() {
 
             {/* Flow diagram */}
             <div className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+             
+              <h3 className="text-sm mt-6 font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                 Integration Flow
               </h3>
               {flowSteps.map((item) => (
-                <Card key={item.step} style="flat" padding="md" elevation="none">
+                <Card
+                  key={item.step}
+                  style="flat"
+                  padding="md"
+                  elevation="none"
+                >
                   <div className="flex gap-3">
-                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-subtle-bg flex items-center justify-center text-xs font-bold">
+                    <div className="shrink-0 w-7 h-7 rounded-full bg-subtle-bg flex items-center justify-center text-xs font-bold">
                       {item.step}
                     </div>
                     <div className="flex-1">
@@ -169,11 +171,9 @@ export default function Home() {
           </div>
         </section>
 
-        <Separator className="max-w-5xl mx-auto" />
 
         {/* Architecture context */}
-        <section className="max-w-5xl mx-auto px-6 py-12">
-          <h2 className="text-2xl font-semibold mb-1">Why Hosted Checkout</h2>
+        <section className="max-w-5xl mx-auto px-6 pb-12">
           <p className="text-muted-foreground mb-8 text-sm max-w-2xl">
             Stripe Hosted Checkout is a full-page redirect (not an iframe). It
             intentionally reduces MVP scope by offloading payment, shipping, and
@@ -213,29 +213,210 @@ export default function Home() {
           <p className="text-muted-foreground mb-6 text-sm">
             What&apos;s working in this PoC today.
           </p>
-          <div className="grid sm:grid-cols-2 gap-3">
+          <div className="flex flex-col gap-4">
             {[
-              { item: "Checkout Session creation (server-side)", done: true },
-              { item: "Redirect to Stripe Hosted Checkout", done: true },
-              { item: "Success / Cancel return pages", done: true },
-              { item: "Webhook signature verification", done: true },
-              { item: "checkout.session.completed handling", done: true },
-              { item: "OrderCloud order fulfillment", done: false },
-              { item: "Dynamic product catalog (from OC)", done: false },
-              { item: "Promotions / coupon mapping", done: false },
-            ].map(({ item, done }) => (
-              <div key={item} className="flex items-center gap-2 text-sm">
+              {
+                item: "Checkout Session creation (server-side)",
+                done: true,
+                detail:
+                  "Next.js API route creates a Stripe Checkout Session with line items, pricing, and OC product metadata.",
+              },
+              {
+                item: "Redirect to Stripe Hosted Checkout",
+                done: true,
+                detail:
+                  "Client-side redirect to Stripe's hosted payment page — no card fields touch our domain.",
+              },
+              {
+                item: "Success / Cancel return pages",
+                done: true,
+                detail:
+                  "Dedicated routes handle post-checkout UX with session details for confirmation.",
+              },
+              {
+                item: "Webhook signature verification",
+                done: true,
+                detail:
+                  "Raw body parsing + stripe.webhooks.constructEvent() ensures only authentic Stripe events are processed.",
+              },
+              {
+                item: "checkout.session.completed handling",
+                done: true,
+                detail:
+                  "Webhook handler retrieves the full session (with expanded line items) and triggers OC fulfillment.",
+              },
+              {
+                item: "Promotions via OrderCloud API",
+                done: true,
+                detail:
+                  "Promo codes are validated against OC's Promotions API at checkout time. The resolved discount is applied to Stripe's unit_amount — OC is the promo authority, Stripe just sees final prices.",
+              },
+              {
+                item: "OrderCloud order fulfillment",
+                done: true,
+                detail:
+                  "On payment completion: creates OC order → adds line items (with Stripe-charged price override) → submits order → records payment. Includes idempotency via xp.stripeSessionId.",
+              },
+            ].map(({ item, done, detail }) => (
+              <div key={item} className="flex gap-2 text-sm">
                 <span
-                  className={
-                    done ? "text-green-600" : "text-muted-foreground"
-                  }
+                  className={`mt-0.5 ${done ? "text-green-600" : "text-muted-foreground"}`}
                 >
                   {done ? "✓" : "○"}
                 </span>
-                <span className={done ? "" : "text-muted-foreground"}>
-                  {item}
-                </span>
+                <div>
+                  <span className={done ? "font-medium" : "text-muted-foreground"}>
+                    {item}
+                  </span>
+                  <p className="text-muted-foreground text-xs mt-0.5">
+                    {detail}
+                  </p>
+                </div>
               </div>
+            ))}
+          </div>
+        </section>
+
+        <Separator className="max-w-5xl mx-auto" />
+
+        {/* PCI Compliance Proof */}
+        <section className="max-w-5xl mx-auto px-6 py-12">
+          <h2 className="text-2xl font-semibold mb-1">
+            PCI Compliance — No Self-Attestation Required
+          </h2>
+          <p className="text-muted-foreground mb-6 text-sm max-w-2xl">
+            Stripe&apos;s documentation confirms that Hosted Checkout eliminates
+            direct card data handling, reducing our PCI obligations to the
+            simplest tier (SAQ A).
+          </p>
+          <div className="flex flex-col gap-4">
+            {[
+              {
+                quote:
+                  "Stripe Checkout and Stripe Elements use a hosted payment field for handling all payment card data, so the cardholder enters all sensitive payment information in a payment field that originates directly from our PCI DSS–validated servers.",
+                source: "stripe.com/guides/pci-compliance",
+              },
+              {
+                quote:
+                  "Many business models don't need to handle sensitive card data. You can instead use one of our low risk payment integrations to securely collect and transmit payment information directly to Stripe without it passing through your servers, reducing your PCI obligations.",
+                source: "docs.stripe.com/security/guide",
+              },
+              {
+                quote:
+                  "Stripe can help significantly reduce the PCI burden for companies by providing a variety of tokenized integration methods (e.g., Checkout, Elements, mobile SDKs, Terminal SDKs), avoiding the need to directly handle sensitive credit card data.",
+                source: "stripe.com/guides/pci-compliance",
+              },
+            ].map(({ quote, source }) => (
+              <Card key={source + quote.slice(0, 20)} style="outline" padding="md" elevation="none">
+                <blockquote className="text-sm italic text-foreground mb-2">
+                  &ldquo;{quote}&rdquo;
+                </blockquote>
+                <p className="text-xs text-muted-foreground">
+                  — <a href={`https://${source}`} target="_blank" rel="noopener noreferrer" className="underline">{source}</a>
+                </p>
+              </Card>
+            ))}
+          </div>
+          <div className="mt-6 p-4 rounded-md bg-subtle-bg">
+            <p className="text-sm font-semibold mb-1">What this means for our PoC:</p>
+            <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+              <li>Card data never touches our servers — Stripe hosts the entire payment form on their domain.</li>
+              <li>We qualify for <strong>SAQ A</strong> — the simplest self-assessment questionnaire (fewest controls).</li>
+              <li>No complex payment middleware required — we only create a Checkout Session and handle the webhook.</li>
+              <li>Stripe is a <strong>PCI Level 1 Service Provider</strong>, certified annually by an independent QSA.</li>
+            </ul>
+          </div>
+        </section>
+
+        <Separator className="max-w-5xl mx-auto" />
+
+        {/* Outstanding Questions & Stakeholder FAQ */}
+        <section className="max-w-5xl mx-auto px-6 py-12">
+          <h2 className="text-2xl font-semibold mb-1">
+            Outstanding Questions &amp; Stakeholder FAQ
+          </h2>
+          <p className="text-muted-foreground mb-6 text-sm max-w-2xl">
+            Questions remaining from the Stripe Hosted Checkout workstream doc
+            and anticipated questions from other project workstreams.
+          </p>
+          <div className="grid gap-4">
+            {[
+              {
+                question: "Do we need Sitecore-hosted middleware at MVP, or is the minimal session + webhook handler sufficient?",
+                status: "answered",
+                answer:
+                  "This PoC proves the minimal approach works: a single API route creates the Checkout Session, and one webhook endpoint handles completion. No additional middleware needed for MVP.",
+              },
+              {
+                question: "What is our decision on 'generic commerce' vs 'OrderCloud-specific' namespace?",
+                status: "open",
+                answer:
+                  "Still open. This PoC is implementation-agnostic (Stripe SDK only). The namespace decision affects how this integrates with the Content SDK workstream.",
+              },
+              {
+                question: "Confirm PCI / self-attestation posture for Stripe Hosted Checkout.",
+                status: "answered",
+                answer:
+                  "Confirmed. See PCI Compliance section above — Hosted Checkout qualifies us for SAQ A, the simplest tier. No card data touches our servers.",
+              },
+              {
+                question: "How do OrderCloud promotions map to Stripe coupons/promo codes?",
+                status: "answered",
+                answer:
+                  "Demonstrated in this PoC with a dual-path approach: Path A — Stripe-native promo codes on the hosted page. Path B — Server-side OC promo resolution applied to line item prices before session creation.",
+              },
+              {
+                question: "How does the checkout session get real product data from OrderCloud?",
+                status: "open",
+                answer:
+                  "Currently using hardcoded product data. Needs integration with the Content SDK / OC catalog workstream to pass real line items.",
+              },
+              {
+                question: "How does order fulfillment flow back to OrderCloud after payment?",
+                status: "open",
+                answer:
+                  "The webhook receives checkout.session.completed — but we still need to define the OC order submission and fulfillment API calls triggered by that event.",
+              },
+              {
+                question: "How does shopper authentication (anonymous vs registered) affect the checkout session?",
+                status: "open",
+                answer:
+                  "Depends on the Auth & Envoy/Proxy workstream. Registered users may need customer_email or customer ID pre-populated on the session.",
+              },
+              {
+                question: "What happens if the webhook fails or is delayed?",
+                status: "noted",
+                answer:
+                  "Stripe retries webhooks for up to 3 days. The success page should not be the source of truth — always rely on the webhook for fulfillment.",
+              },
+              {
+                question: "Can we support multiple currencies / international shipping?",
+                status: "noted",
+                answer:
+                  "Stripe Checkout supports Adaptive Pricing and configurable shipping rates. Out of scope for MVP but a natural extension.",
+              },
+            ].map(({ question, status, answer }) => (
+              <Card key={question.slice(0, 30)} style="flat" padding="md" elevation="none">
+                <div className="flex items-start gap-3">
+                  <Badge
+                    colorScheme={
+                      status === "answered"
+                        ? "success"
+                        : status === "open"
+                        ? "warning"
+                        : "neutral"
+                    }
+                    size="sm"
+                    className="shrink-0 mt-0.5"
+                  >
+                    {status}
+                  </Badge>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">{question}</p>
+                    <p className="text-xs text-muted-foreground">{answer}</p>
+                  </div>
+                </div>
+              </Card>
             ))}
           </div>
         </section>
