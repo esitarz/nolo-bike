@@ -14,9 +14,9 @@ export interface ResolvedPromotion {
 export async function resolveOcPromotion(
   code: string,
 ): Promise<ResolvedPromotion | null> {
-  await getOcToken();
-
   try {
+    await getOcToken();
+
     const promotions = await Me.ListPromotions({
       filters: { Code: code },
     });
