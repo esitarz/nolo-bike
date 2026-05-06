@@ -1,22 +1,22 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
+import { Me } from "ordercloud-javascript-sdk";
 import { resolveOcPromotion } from "@/lib/ordercloud-promotions";
+import { getOcToken } from "@/lib/ordercloud";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
 interface CartItemPayload {
   id: string;
-  name: string;
-  price: number;
   quantity: number;
-  image?: string;
 }
 
 // -----------------------------------------------------------------
-// Path B: Server-side promo resolution via OrderCloud Promotions API
-// The middleware calls OC to validate eligibility and returns the
-// discount percentage. The discounted price is baked into Stripe's
-// unit_amount so Stripe just sees final prices.
+// Server-side checkout session creation:
+// 1. Client sends only product IDs + quantities (no prices)
+// 2. Server fetches authoritative product data from OrderCloud
+// 3. Promo codes validated against OC Promotions API
+// 4. Stripe receives server-validated prices only
 // -----------------------------------------------------------------
 
 export default async function handler(
@@ -27,10 +27,9 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Validate required env vars
   if (!process.env.STRIPE_SECRET_KEY) {
     console.error("[create-checkout-session] STRIPE_SECRET_KEY not set");
-    return res.status(500).json({ error: "Server misconfiguration: STRIPE_SECRET_KEY" });
+    return res.status(500).json({ error: "Server misconfiguration" });
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -41,23 +40,37 @@ export default async function handler(
       promoCode?: string;
     };
 
+    // Authenticate with OC to fetch product data
+    await getOcToken();
+
+    // Resolve cart items — fetch authoritative prices from OC
+    const cartItems = items && items.length > 0
+      ? items
+      : [{ id: "space-horse-tiagra", quantity: 1 }];
+
+    const resolvedItems = await Promise.all(
+      cartItems.map(async (item) => {
+        const product = await Me.GetProduct(item.id);
+        // Price comes from the product's default price schedule (in OC, prices are in dollars)
+        const priceSchedule = product.PriceSchedule;
+        const priceInCents = Math.round(
+          (priceSchedule?.PriceBreaks?.[0]?.Price ?? 0) * 100
+        );
+        return {
+          id: product.ID!,
+          name: product.Name!,
+          price: priceInCents,
+          quantity: item.quantity,
+        };
+      })
+    );
+
     // Resolve the promo via OrderCloud Promotions API
     const promotion = promoCode ? await resolveOcPromotion(promoCode) : null;
 
-    // Build line items — apply discount to unit_amount if promo resolved
-    const baseItems = items && items.length > 0
-      ? items
-      : [
-          {
-            id: "space-horse-tiagra",
-            name: "Space Horse Tiagra",
-            price: 189900,
-            quantity: 1,
-          },
-        ];
-
+    // Build Stripe line items with server-validated prices
     const line_items: Stripe.Checkout.SessionCreateParams["line_items"] =
-      baseItems.map((item) => {
+      resolvedItems.map((item) => {
         const unitAmount = promotion
           ? Math.round(item.price * (1 - promotion.percentOff / 100))
           : item.price;

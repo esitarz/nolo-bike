@@ -61,10 +61,7 @@ export function Minicart() {
         body: JSON.stringify({
           items: items.map((i) => ({
             id: i.id,
-            name: i.name,
-            price: i.price,
             quantity: i.quantity,
-            image: i.image,
           })),
           promoCode: promoApplied ? promoCode : undefined,
         }),
