@@ -2,7 +2,7 @@
 
 Living document of questions raised during the Stripe + OrderCloud integration work. Updated as answers are confirmed.
 
-*Last updated: May 6, 2026*
+*Last updated: May 7, 2026*
 
 ---
 
@@ -79,17 +79,22 @@ No separate "mark as paid" API exists — it's the combination of these two call
 From the webhook, the fulfillment handler sends:
 
 | Data | Source | OC field |
-|------|--------|----------|
+| ---- | ------ | -------- |
 | Customer name + address | `session.customer_details` | `Order.BillingAddress` |
 | Stripe Session ID | `session.id` | `Order.xp.stripeSessionId` |
 | PaymentIntent ID | `session.payment_intent` | `Order.xp.stripePaymentIntent` |
-| Promo code used | `session.metadata.promoCode` | `Order.xp.promoCode` |
+| Promo source | `"stripe"` or null | `Order.xp.promoSource` |
+| Discount amount (cents) | `total_details.amount_discount` | `Order.xp.stripeDiscountAmountCents` |
+| Stripe promotion code ID | `session.discounts` | `Order.xp.stripePromotionCode` |
 | Product IDs | Stripe product metadata | `LineItem.ProductID` |
-| Charged price | `item.amount_total / quantity` | `LineItem.UnitPrice` |
+| Gross amount (cents) | `item.amount_subtotal` | `LineItem.xp.stripe.grossCents` |
+| Discount (cents) | `item.amount_discount` | `LineItem.xp.stripe.discountCents` |
+| Net charged (cents) | `item.amount_total` | `LineItem.xp.stripe.netCents` |
+| Promo code (if discounted) | `session.discounts` | `LineItem.xp.stripe.promoCode` |
 | Quantity | `item.quantity` | `LineItem.Quantity` |
 | Total paid | `session.amount_total` | `Payment.Amount` |
 
-**Minimum required:** `Orders.Submit()` + `Payments.Create(Accepted: true, Amount)`. Everything else is for traceability.
+**Note:** `LineItem.UnitPrice` is **not overridden** — it stays at PriceSchedule pricing. The `OverrideUnitPrice` role is no longer used. The delta between `Order.Subtotal` (gross) and `Payment.Amount` (net) is the discount, fully explained by `xp` metadata.
 
 ---
 
@@ -128,26 +133,62 @@ Questions to resolve:
 
 ---
 
-## Open (Unanswered)
+## Resolved (Previously Open)
 
-### Q: How does Stripe-native promo attribution flow back to OC?
+### ~~Q: How does Stripe-native promo attribution flow back to OC?~~
 
-When a customer uses a Stripe promo code (not our OC promo), the discount is applied but OC has no record of which promo. Need to decide: do we read `session.total_details.breakdown.discounts` in the webhook and write it to OC?
+**Status:** Answered — Resolved.
+
+The webhook expands `total_details.breakdown` and `discounts` on the completed session. Discount details are stored at two levels:
+- **Order xp:** `promoSource`, `stripeDiscountAmountCents`, `stripePromotionCode`, `stripeCouponId`
+- **Line item xp.stripe:** `grossCents`, `discountCents`, `netCents`, `promoCode`, `couponId`
+
+Promo attribution is only set on line items where `discountCents > 0`. No inference needed.
 
 ---
 
-### Q: Should we unify the cart order and fulfillment order?
+### ~~Q: Should we unify the cart order and fulfillment order?~~
 
-Currently two OC orders per transaction. The `ocOrderId` is in session metadata — should the webhook submit the existing cart order instead of creating a new one?
+**Status:** Answered — Resolved differently.
+
+Instead of unifying them, the cart order is now **deleted** after the Stripe session is created. It only existed to read PriceSchedule pricing. The fulfillment order is the sole OC order, with a deterministic ID: `stripe-{last 8 of session ID}`.
 
 ---
+
+### ~~Q: Do we have a plan for handling retries?~~
+
+**Status:** Answered — Resolved.
+
+Fulfillment is resumable and idempotent. Each step (order creation, line items, submit, payment) checks prior completion before executing. The webhook returns 500 on OC failure, triggering Stripe's automatic retry (exponential backoff, up to 3 days).
+
+---
+
+### ~~Q: Can we amend or cancel a completed Checkout Session?~~
+
+**Status:** Answered — Resolved.
+
+A completed Checkout Session cannot be amended. The paths are:
+- **Before completion:** Expire the session, create a new one
+- **After completion:** Issue a refund (full or partial)
+
+`POST /api/orders/cancel` orchestrates both Stripe (refund) and OC (cancel) in a single call. Refund metadata is stored in OC order `xp`.
+
+---
+
+## Still Open
 
 ### Q: Who owns transactional emails — Stripe or OC?
 
-Stripe sends payment receipts by default. Should OC also send order confirmation? Or do we disable Stripe receipts and let OC own all communications?
+Stripe sends payment receipts by default with Hosted Checkout. Should OC also send order confirmation via MessageSenders? Or do we disable Stripe receipts and let OC own all communications?
 
 ---
 
 ### Q: How does this integrate with the Content SDK workstream?
 
-The product catalog rendering is currently hardcoded in the UI. Content SDK would presumably provide product data for display. How does that connect to OC's catalog for pricing?
+The product catalog is now fetched from OC via `Me.ListProducts()`. Content SDK would presumably provide richer product display data (images, descriptions, structured content). How does that connect to OC's catalog for pricing?
+
+---
+
+### Q: How does buyer auth integrate?
+
+Depends on the Auth & Envoy/Proxy workstream. Currently all orders use a single `DefaultContextUser`. Registered users may need `customer_email` or customer ID pre-populated on the Stripe session.

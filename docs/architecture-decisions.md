@@ -71,21 +71,27 @@ Server does:  OC order → add line items → read back UnitPrice → create Str
 
 ---
 
-## ADR-4: Dual-Path Promo Code Strategy
+## ADR-4: Stripe-Only Promo Code Strategy
 
-**Decision:** Support both OC-resolved promos and Stripe-native promo codes.
+**Decision:** Promotions are managed exclusively in Stripe. OC Promotions API is not used.
 
-**Context:** Two promo sources exist:
-- **OC Promotions API** — promotions defined in OrderCloud (e.g., "OC451" = 45.1% off)
-- **Stripe Coupons** — promotions defined in Stripe Dashboard
+**Context:** Two promo sources were evaluated:
+- **OC Promotions API** — promotions defined in OrderCloud
+- **Stripe Coupons/Promotion Codes** — promotions defined in Stripe Dashboard
 
 **Implementation:**
-- **Path A (Stripe-native):** If the customer doesn't enter a promo in our cart UI, `allow_promotion_codes: true` is set on the session. Customer can enter a Stripe promo code on the hosted checkout page.
-- **Path B (OC-resolved):** If the customer enters a promo in our cart UI, server validates it against `Me.ListPromotions`, applies the discount to `unit_amount` before creating the session. No Stripe promo codes allowed (price already reflects discount).
+- `allow_promotion_codes: true` is always set on the Checkout Session
+- Customer enters promo codes on the Stripe-hosted checkout page
+- Stripe validates, applies the discount, and collects the net payment
+- On `checkout.session.completed`, the webhook reads per-line-item discount details from Stripe (`amount_subtotal`, `amount_discount`, `amount_total`) and persists them to OC line item `xp.stripe`
+- Promo attribution (`promoCode`, `couponId`) is only set on line items where `discountCents > 0`
+- OC line items keep PriceSchedule pricing (gross) — no `OverrideUnitPrice`
 
-**Trade-off / Known gap:**
-- Path A: Stripe-native promos are **not currently recorded back to OC**. The fulfillment order gets the discounted `amount_total` as the price, but there's no explicit promo record in OC.
-- Path B: OC promo is recorded in `session.metadata.promoCode` and flows back to OC order's `xp.promoCode`.
+**Rationale:**
+- Reduces integration surface — no OC promo resolution code needed
+- Stripe owns the full promo lifecycle (creation, validation, redemption, reporting)
+- OC receives the financial outcome per line item for reconciliation
+- `Payment.Amount` (net) vs `Order.Subtotal` (gross) delta is fully explained by `xp` metadata
 
 ---
 
@@ -98,12 +104,13 @@ Server does:  OC order → add line items → read back UnitPrice → create Str
 - Stripe retries failed webhooks for up to 3 days
 - Webhook includes the full session data (payment status, amounts, line items)
 
-**Implementation:** The webhook handler calls `fulfillOrder(session)` which:
-1. Checks idempotency (has this session already been fulfilled?)
-2. Creates OC order with billing address + Stripe metadata
-3. Adds line items with `UnitPrice` from Stripe's charged amount
-4. Submits the order (`Orders.Submit`)
-5. Records payment (`Payments.Create` with `Accepted: true`)
+**Implementation:** The webhook handler calls `fulfillOrder(session)` which is resumable and idempotent:
+1. **Find-or-create** OC order (keyed on `xp.stripeSessionId`) — if found, resumes from current state
+2. **Ensure line items exist** — skips already-created items by ProductID
+3. **Submit order** — only if `order.Status === "Unsubmitted"`. Throws on failure to trigger webhook retry
+4. **Ensure payment recorded** — checks existing payments by `xp.stripeSessionId`, only creates if missing
+
+If any step fails, the webhook returns 500 so Stripe retries. On retry, completed steps are skipped.
 
 ---
 
@@ -116,7 +123,7 @@ Server does:  OC order → add line items → read back UnitPrice → create Str
 2. Client Credentials **without** DefaultContextUser — token is admin-only, must use admin endpoints with explicit buyer IDs
 
 **Rationale for keeping DefaultContextUser (PoC):**
-- Simpler code — can use `Me.ListOrders`, `Me.ListPromotions`, `Me.GetProduct`
+- Simpler code — can use `Me.ListOrders`, `Me.ListProducts`, `Me.GetProduct`
 - All orders created under one buyer user (`buyer01_user`)
 - Appropriate for a PoC where we don't yet have real buyer authentication
 
@@ -124,18 +131,44 @@ Server does:  OC order → add line items → read back UnitPrice → create Str
 
 ---
 
-## ADR-7: Separate Cart Order vs Fulfillment Order (Known Gap)
+## ADR-7: Cart Order Cleanup
 
-**Decision (current):** The pre-checkout OC order (cart) and the post-payment OC order (fulfillment) are separate orders.
+**Decision:** The temporary OC order used for pricing is deleted after the Stripe Checkout Session is created.
 
 **Context:**
-- At checkout time: server creates/reuses an OC order to read authoritative pricing
-- After payment: webhook creates a **new** OC order with the Stripe-charged amounts
+- At checkout time: server creates an OC order to read PriceSchedule pricing
+- The Stripe session is created from that pricing
+- The cart order is then deleted — it was only needed to read `UnitPrice`
+- After payment: the webhook creates a **new** OC order (the fulfillment order) with a deterministic ID (`stripe-{last 8 of session ID}`)
 
-**Why this is a gap:**
-- Two OC orders exist for one transaction
-- The cart order is left in "Unsubmitted" state (orphaned)
+**Why not reuse the cart order?**
+- The fulfillment order needs Stripe-specific metadata (session ID, payment intent, discount info) that isn't known at cart time
+- Line items need `xp.stripe` discount breakdown from the completed session
+- Keeping them separate is cleaner than patching the cart order post-payment
 
-**Future fix:** The `ocOrderId` is stored in `session.metadata`. The fulfillment handler should submit the *existing* cart order instead of creating a new one. This would unify the flow into a single OC order lifecycle.
+**Status:** Resolved. Cart orders are now deleted after session creation. No orphans.
 
-**Status:** Known gap, documented for future iteration.
+---
+
+## ADR-8: Cancel & Refund Orchestration
+
+**Decision:** Cancellation is a single API call that orchestrates both Stripe (refund) and OC (cancel) together.
+
+**Context:** OC has no integration events or message senders configured for MVP. Status changes in one system do not automatically propagate to the other. Changing OC order status to "Canceled" does not affect Stripe, and vice versa.
+
+**Implementation:**
+- `POST /api/orders/cancel` accepts an OC order ID
+- Looks up the linked Stripe session from `order.xp.stripeSessionId`
+- If order is paid: issues a Stripe refund via `stripe.refunds.create()`
+- If order is unpaid: expires the Checkout Session
+- Cancels the order in OC via `Orders.Cancel()`
+- Records refund metadata in OC order `xp` (`stripeRefundId`, `stripeRefundStatus`, `stripeRefundAmountCents`, `canceledAt`)
+
+**Operational rules:**
+| Timing | Action |
+|--------|--------|
+| Before checkout completes | Expire session, create new one |
+| After payment, before or after fulfillment | Refund + cancel OC order |
+| Completed Checkout Session | Cannot be "amended" — only refund |
+
+**Status:** Implemented. Order confirmation page has a "Cancel & Refund" button that calls this endpoint.
