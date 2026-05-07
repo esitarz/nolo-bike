@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Head from "next/head";
+import type { GetStaticProps, InferGetStaticPropsType } from "next";
 import { mdiCartOutline } from "@mdi/js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,6 +9,8 @@ import { Separator } from "@/components/ui/separator";
 import { useCart } from "@/context/cart";
 import { Minicart } from "@/components/Minicart";
 import { Icon } from "@/lib/icon";
+import { getBuildBadgeLabel } from "@/lib/build-metadata";
+import type { OcProduct } from "@/pages/api/products";
 
 const flowSteps = [
   {
@@ -33,19 +36,43 @@ const flowSteps = [
   },
 ];
 
-export default function Home() {
-  const { addItem, items, openCart } = useCart();
-  const [added, setAdded] = useState(false);
+type HomeProps = {
+  buildBadgeLabel: string;
+};
 
-  function handleAddToCart() {
+export const getStaticProps: GetStaticProps<HomeProps> = async () => {
+  return {
+    props: {
+      buildBadgeLabel: getBuildBadgeLabel(),
+    },
+  };
+};
+
+export default function Home({
+  buildBadgeLabel,
+}: InferGetStaticPropsType<typeof getStaticProps>) {
+  const { addItem, items, openCart } = useCart();
+  const [addedId, setAddedId] = useState<string | null>(null);
+  const [products, setProducts] = useState<OcProduct[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/products")
+      .then((r) => r.json())
+      .then((data) => setProducts(data.products ?? []))
+      .catch((err) => console.error("Failed to load products:", err))
+      .finally(() => setLoadingProducts(false));
+  }, []);
+
+  function handleAddToCart(product: OcProduct) {
     addItem({
-      id: "space-horse-tiagra",
-      name: "Space Horse Tiagra",
-      price: 189900,
-      image: "/images/space-horse-tiagra.jpg",
+      id: product.id,
+      name: product.name,
+      price: product.priceInCents,
+      image: product.image ?? undefined,
     });
-    setAdded(true);
-    setTimeout(() => setAdded(false), 2000);
+    setAddedId(product.id);
+    setTimeout(() => setAddedId(null), 2000);
   }
 
   const cartCount = items.reduce((s, i) => s + i.quantity, 0);
@@ -64,8 +91,8 @@ export default function Home() {
             <span className="text-sm font-semibold tracking-tight">
               Commerce in SitecoreAI
             </span>
-            <Badge colorScheme="teal" size="sm">
-              Proof of Concept
+            <Badge colorScheme="teal" size="sm" className="text-[.6rem]">
+              {buildBadgeLabel}
             </Badge>
           </div>
           <div className="flex items-center gap-3">
@@ -97,81 +124,74 @@ export default function Home() {
 
         <Separator className="max-w-5xl mx-auto" />
 
-        {/* Demo Product */}
-        <section className="max-w-5xl mx-auto px-6">
-          <div className="grid md:grid-cols-2 gap-8 py-12">
-            <Card style="outline" padding="lg" elevation="xs">
-              <div className="flex flex-col h-full">
-                <img
-                  src="/images/space-horse-tiagra.jpg"
-                  alt="Space Horse Tiagra"
-                  className="w-full rounded-md mb-4 bg-white"
-                />
-                <Badge colorScheme="neutral" size="sm" className="mb-3 w-fit">
-                  All-City Cycles
-                </Badge>
-                <h2 className="text-2xl font-bold mb-2">Space Horse Tiagra</h2>
-                <p className="text-muted-foreground text-sm mb-4 flex-1">
-                  The agile and stable Space Horse is our most versatile and
-                  popular model, ready to take you and your gear wherever
-                  adventure leads — from road riding to randonneuring to
-                  full-fledged touring.
-                </p>
-                <div className="flex items-baseline gap-2 mb-6">
-                  <span className="text-3xl font-bold">$1,899.00</span>
-                  <span className="text-sm text-muted-foreground">USD</span>
-                </div>
-                <Button
-                  onClick={handleAddToCart}
-                  variant="default"
-                  className="w-full"
-                >
-                  {added ? "Added ✓" : "Add to Cart"}
-                </Button>
-                <p className="mt-3 text-xs text-muted-foreground text-center">
-                  Try promo code in cart · Test card:{" "}
-                  <code className="bg-subtle-bg px-1.5 py-0.5 rounded font-mono">
-                    4242 4242 4242 4242
-                  </code>
-                </p>
-              </div>
-            </Card>
+        {/* Products from OrderCloud */}
+        <section className="max-w-5xl mx-auto px-6 py-12">
+          <div className="mb-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300 mb-2">
+              Live Catalog
+            </p>
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight mb-2">
+              Products Pulled from OrderCloud
+            </h1>
+            <p className="text-sm text-muted-foreground max-w-2xl">
+              These product cards are sourced from the OrderCloud catalog in
+              real time, while checkout is handled by Stripe Hosted Checkout.
+            </p>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Stripe promo codes accepted at checkout · Test card{" "}
+              <code className="bg-subtle-bg px-1.5 py-0.5 rounded font-mono">
+                4242 4242 4242 4242
+              </code>
+            </p>
+          </div>
 
-            {/* Flow diagram */}
-            <div className="flex flex-col gap-3">
-             
-              <h3 className="text-sm mt-6 font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                Integration Flow
-              </h3>
-              {flowSteps.map((item) => (
-                <Card
-                  key={item.step}
-                  style="flat"
-                  padding="md"
-                  elevation="none"
-                >
-                  <div className="flex gap-3">
-                    <div className="shrink-0 w-7 h-7 rounded-full bg-subtle-bg flex items-center justify-center text-xs font-bold">
-                      {item.step}
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-semibold text-sm mb-0.5">
-                        {item.title}
-                      </h4>
-                      <p className="text-xs text-muted-foreground mb-1">
-                        {item.description}
-                      </p>
-                      <code className="text-xs bg-subtle-bg px-1.5 py-0.5 rounded font-mono">
-                        {item.tech}
-                      </code>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-0.5">
+            {loadingProducts && (
+              <p className="text-sm text-muted-foreground col-span-full">
+                Loading products from OrderCloud…
+              </p>
+            )}
+
+            {products.map((product) => (
+              <button
+                key={product.id}
+                onClick={() => handleAddToCart(product)}
+                className="group relative aspect-3/4 w-full overflow-hidden rounded bg-zinc-900 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              >
+                {/* Background image */}
+                {product.images ? (
+                  <img
+                    src={product.images[0]}
+                    alt={product.name}
+                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-zinc-800" />
+                )}
+
+                {/* Gradient overlay for text legibility */}
+                <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/20 to-transparent" />
+
+                {/* Content pinned to bottom */}
+                <div className="relative z-10 flex h-full flex-col justify-end p-5">
+                  <h2 className="text-lg font-bold leading-tight text-white mb-1 drop-shadow-sm">
+                    {product.name}
+                  </h2>
+                  <p className="text-sm text-white mb-2">
+                    $
+                    {(product.priceInCents / 100).toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </p>
+                  <span className="inline-flex cursor-pointer items-center w-full backdrop-blur-xs bg-white/25 border-white/20 px-4 py-1 text-md font-normal text-white transition-colors duration-200 group-hover:bg-white/25">
+                    {addedId === product.id ? "Added ✓" : "Add to Cart"}
+                    <span className="ml-auto">➡</span>
+                  </span>
+                </div>
+              </button>
+            ))}
           </div>
         </section>
-
 
         {/* Architecture context */}
         <section className="max-w-5xl mx-auto px-6 pb-12">
@@ -204,6 +224,46 @@ export default function Home() {
               </Card>
             ))}
           </div>
+
+          <details className="mt-6 rounded-xl border border-border bg-subtle-bg/60 p-4 sm:p-5">
+            <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-1">
+                  Technical Detail
+                </p>
+                <p className="text-sm font-semibold">Integration Flow</p>
+              </div>
+              <span className="text-xs text-muted-foreground">Expand</span>
+            </summary>
+
+            <div className="mt-4 grid md:grid-cols-3 gap-3">
+              {flowSteps.map((item) => (
+                <Card
+                  key={item.step}
+                  style="flat"
+                  padding="md"
+                  elevation="none"
+                >
+                  <div className="flex gap-3">
+                    <div className="shrink-0 w-7 h-7 rounded-full bg-body-bg flex items-center justify-center text-xs font-bold">
+                      {item.step}
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-sm mb-0.5">
+                        {item.title}
+                      </h4>
+                      <p className="text-xs text-muted-foreground mb-1">
+                        {item.description}
+                      </p>
+                      <code className="text-xs bg-body-bg px-1.5 py-0.5 rounded font-mono">
+                        {item.tech}
+                      </code>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </details>
         </section>
 
         <Separator className="max-w-5xl mx-auto" />
@@ -247,10 +307,10 @@ export default function Home() {
                   "Webhook handler retrieves the full session (with expanded line items) and triggers OC fulfillment.",
               },
               {
-                item: "Promotions via OrderCloud API",
+                item: "Promotions via Stripe-native promo codes",
                 done: true,
                 detail:
-                  "Promo codes are validated against OC's Promotions API at checkout time. The resolved discount is applied to Stripe's unit_amount — OC is the promo authority, Stripe just sees final prices.",
+                  "Stripe-native promotion codes are enabled on the hosted Checkout page. Discount details flow back to OrderCloud via the webhook and are stored in order xp for reconciliation.",
               },
               {
                 item: "OrderCloud order fulfillment",
@@ -266,7 +326,9 @@ export default function Home() {
                   {done ? "✓" : "○"}
                 </span>
                 <div>
-                  <span className={done ? "font-medium" : "text-muted-foreground"}>
+                  <span
+                    className={done ? "font-medium" : "text-muted-foreground"}
+                  >
                     {item}
                   </span>
                   <p className="text-muted-foreground text-xs mt-0.5">
@@ -308,23 +370,50 @@ export default function Home() {
                 source: "stripe.com/guides/pci-compliance",
               },
             ].map(({ quote, source }) => (
-              <Card key={source + quote.slice(0, 20)} style="outline" padding="md" elevation="none">
+              <Card
+                key={source + quote.slice(0, 20)}
+                style="outline"
+                padding="md"
+                elevation="none"
+              >
                 <blockquote className="text-sm italic text-foreground mb-2">
                   &ldquo;{quote}&rdquo;
                 </blockquote>
                 <p className="text-xs text-muted-foreground">
-                  — <a href={`https://${source}`} target="_blank" rel="noopener noreferrer" className="underline">{source}</a>
+                  —{" "}
+                  <a
+                    href={`https://${source}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    {source}
+                  </a>
                 </p>
               </Card>
             ))}
           </div>
           <div className="mt-6 p-4 rounded-md bg-subtle-bg">
-            <p className="text-sm font-semibold mb-1">What this means for our PoC:</p>
+            <p className="text-sm font-semibold mb-1">
+              What this means for our PoC:
+            </p>
             <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
-              <li>Card data never touches our servers — Stripe hosts the entire payment form on their domain.</li>
-              <li>We qualify for <strong>SAQ A</strong> — the simplest self-assessment questionnaire (fewest controls).</li>
-              <li>No complex payment middleware required — we only create a Checkout Session and handle the webhook.</li>
-              <li>Stripe is a <strong>PCI Level 1 Service Provider</strong>, certified annually by an independent QSA.</li>
+              <li>
+                Card data never touches our servers — Stripe hosts the entire
+                payment form on their domain.
+              </li>
+              <li>
+                We qualify for <strong>SAQ A</strong> — the simplest
+                self-assessment questionnaire (fewest controls).
+              </li>
+              <li>
+                No complex payment middleware required — we only create a
+                Checkout Session and handle the webhook.
+              </li>
+              <li>
+                Stripe is a <strong>PCI Level 1 Service Provider</strong>,
+                certified annually by an independent QSA.
+              </li>
             </ul>
           </div>
         </section>
@@ -343,43 +432,49 @@ export default function Home() {
           <div className="grid gap-4">
             {[
               {
-                question: "Do we need Sitecore-hosted middleware at MVP, or is the minimal session + webhook handler sufficient?",
+                question:
+                  "Do we need Sitecore-hosted middleware at MVP, or is the minimal session + webhook handler sufficient?",
                 status: "answered",
                 answer:
                   "This PoC proves the minimal approach works: a single API route creates the Checkout Session, and one webhook endpoint handles completion. No additional middleware needed for MVP.",
               },
               {
-                question: "What is our decision on 'generic commerce' vs 'OrderCloud-specific' namespace?",
+                question:
+                  "What is our decision on 'generic commerce' vs 'OrderCloud-specific' namespace?",
                 status: "open",
                 answer:
                   "Still open. This PoC is implementation-agnostic (Stripe SDK only). The namespace decision affects how this integrates with the Content SDK workstream.",
               },
               {
-                question: "Confirm PCI / self-attestation posture for Stripe Hosted Checkout.",
+                question:
+                  "Confirm PCI / self-attestation posture for Stripe Hosted Checkout.",
                 status: "answered",
                 answer:
                   "Confirmed. See PCI Compliance section above — Hosted Checkout qualifies us for SAQ A, the simplest tier. No card data touches our servers.",
               },
               {
-                question: "How do OrderCloud promotions map to Stripe coupons/promo codes?",
+                question: "How do promotions work with Stripe Hosted Checkout?",
                 status: "answered",
                 answer:
-                  "Demonstrated in this PoC with a dual-path approach: Path A — Stripe-native promo codes on the hosted page. Path B — Server-side OC promo resolution applied to line item prices before session creation.",
+                  "Stripe-native promo codes are enabled on the hosted Checkout page. On completion, the webhook reads discount details from the session and persists them to the OC order's xp for reporting and reconciliation.",
               },
               {
-                question: "How does the checkout session get real product data from OrderCloud?",
+                question:
+                  "How does the checkout session get real product data from OrderCloud?",
                 status: "answered",
                 answer:
                   "Demonstrated. The server decodes the OC JWT to get the active order ID (from the 'orderid' claim or by querying Me.ListOrders for Unsubmitted orders), then calls LineItems.List() to fetch authoritative pricing. The client sends no product data or prices.",
               },
               {
-                question: "How does order fulfillment flow back to OrderCloud after payment?",
+                question:
+                  "How does order fulfillment flow back to OrderCloud after payment?",
                 status: "answered",
                 answer:
                   "Demonstrated. On checkout.session.completed, the webhook creates an OC order, adds line items with Stripe-charged price override (OverrideUnitPrice), submits the order, and records a payment — with idempotency via xp.stripeSessionId.",
               },
               {
-                question: "How does shopper authentication (anonymous vs registered) affect the checkout session?",
+                question:
+                  "How does shopper authentication (anonymous vs registered) affect the checkout session?",
                 status: "open",
                 answer:
                   "Depends on the Auth & Envoy/Proxy workstream. Registered users may need customer_email or customer ID pre-populated on the session.",
@@ -391,21 +486,27 @@ export default function Home() {
                   "Stripe retries webhooks for up to 3 days. The success page should not be the source of truth — always rely on the webhook for fulfillment.",
               },
               {
-                question: "Can we support multiple currencies / international shipping?",
+                question:
+                  "Can we support multiple currencies / international shipping?",
                 status: "noted",
                 answer:
                   "Stripe Checkout supports Adaptive Pricing and configurable shipping rates. Out of scope for MVP but a natural extension.",
               },
             ].map(({ question, status, answer }) => (
-              <Card key={question.slice(0, 30)} style="flat" padding="md" elevation="none">
+              <Card
+                key={question.slice(0, 30)}
+                style="flat"
+                padding="md"
+                elevation="none"
+              >
                 <div className="flex items-start gap-3">
                   <Badge
                     colorScheme={
                       status === "answered"
                         ? "success"
                         : status === "open"
-                        ? "warning"
-                        : "neutral"
+                          ? "warning"
+                          : "neutral"
                     }
                     size="sm"
                     className="shrink-0 mt-0.5"
