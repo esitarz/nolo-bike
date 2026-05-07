@@ -36,7 +36,6 @@ export async function getOcToken(): Promise<string> {
     "MeAdmin",
     "OrderAdmin",
     "OrderReader",
-    "OverrideUnitPrice",
   ]);
 
   tokenCache = {
