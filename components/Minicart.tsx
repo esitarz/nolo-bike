@@ -9,8 +9,6 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
 function formatCents(cents: number) {
@@ -24,16 +22,7 @@ export function Minicart() {
     closeCart,
     removeItem,
     updateQuantity,
-    promoCode,
-    setPromoCode,
-    promoApplied,
-    promoError,
-    discountPercent,
-    applyPromo,
-    clearPromo,
     subtotal,
-    discount,
-    total,
   } = useCart();
 
   const [loading, setLoading] = useState(false);
@@ -63,7 +52,6 @@ export function Minicart() {
             id: i.id,
             quantity: i.quantity,
           })),
-          promoCode: promoApplied ? promoCode : undefined,
         }),
       });
       const data = await res.json();
@@ -100,7 +88,7 @@ export function Minicart() {
                 <img
                   src={item.image}
                   alt={item.name}
-                  className="w-16 h-16 object-cover rounded bg-white shrink-0"
+                  className="w-18 h-18 object-contain rounded bg-white shrink-0"
                 />
               )}
               <div className="flex-1 min-w-0">
@@ -144,77 +132,15 @@ export function Minicart() {
           <>
             <Separator />
 
-            {/* Promo code */}
-            <div className="px-4 py-3">
-              <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                Promotion Code
-              </p>
-              {promoApplied ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Badge colorScheme="success" size="sm">
-                      {promoCode.toUpperCase()}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      {discountPercent}% off
-                    </span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={clearPromo}
-                  >
-                    Remove
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <div className="flex gap-2">
-                    <Input
-                      value={promoCode}
-                      onChange={(e) => setPromoCode(e.target.value)}
-                      placeholder="e.g. OC451"
-                      className="h-9 text-sm"
-                      onKeyDown={(e) => e.key === "Enter" && applyPromo()}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={applyPromo}
-                      disabled={!promoCode.trim()}
-                    >
-                      Apply
-                    </Button>
-                  </div>
-                  {promoError && (
-                    <p className="text-xs text-destructive">{promoError}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Try <code className="font-mono bg-subtle-bg px-1 rounded">OC451</code> (45.1% off via OrderCloud) or leave empty for Stripe-native codes
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
             {/* Totals */}
             <div className="px-4 py-3 space-y-1">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Subtotal</span>
+              <div className="flex justify-between text-sm font-semibold">
+                <span>Subtotal</span>
                 <span>{formatCents(subtotal)}</span>
               </div>
-              {discount > 0 && (
-                <div className="flex justify-between text-sm text-green-600">
-                  <span>Discount ({discountPercent}%)</span>
-                  <span>−{formatCents(discount)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-sm font-semibold pt-1">
-                <span>Total</span>
-                <span>{formatCents(total)}</span>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Promo codes can be entered on the Stripe checkout page
+              </p>
             </div>
           </>
         )}
