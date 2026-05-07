@@ -52,29 +52,37 @@ export default async function handler(
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
 
-      // Expand line_items and their products (to get metadata with OC product IDs)
+      // Expand line_items, products, and discounts for full context
       const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
-        expand: ["line_items.data.price.product"],
+        expand: [
+          "line_items.data.price.product",
+          "total_details.breakdown",
+          "discounts",
+        ],
       });
 
       console.log("[webhook] Payment completed:", {
         sessionId: fullSession.id,
         paymentIntent: fullSession.payment_intent,
         amountTotal: fullSession.amount_total,
+        discountAmount: fullSession.total_details?.amount_discount ?? 0,
       });
 
-      // Fulfill in OrderCloud
+      // Fulfill in OrderCloud — let errors propagate so Stripe retries
       try {
         const result = await fulfillOrder(fullSession);
         console.log("[webhook] OC fulfillment success:", result);
       } catch (err) {
-        // Don't fail the webhook — log for manual reconciliation
         const message = err instanceof Error ? err.message : "Unknown error";
         console.error("[webhook] OC fulfillment FAILED:", message);
         console.error(
           "[webhook] Session needs manual fulfillment:",
           fullSession.id,
         );
+        // Return 500 so Stripe retries the webhook delivery
+        return res
+          .status(500)
+          .json({ error: "Fulfillment failed, will retry" });
       }
 
       break;

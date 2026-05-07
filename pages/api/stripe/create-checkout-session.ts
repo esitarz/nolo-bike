@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
 import { Me, Orders, LineItems } from "ordercloud-javascript-sdk";
-import { resolveOcPromotion } from "@/lib/ordercloud-promotions";
 import { getOcToken } from "@/lib/ordercloud";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
@@ -11,8 +10,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 // 1. Authenticate with OC (Client Credentials + DefaultContextUser)
 // 2. Decode the JWT to extract the current order ID (cart)
 // 3. Fetch line items from that OC order — authoritative pricing
-// 4. Optionally apply OC promotions
-// 5. Create Stripe Checkout Session from OC line items
+// 4. Create Stripe Checkout Session from OC line items
+//    Stripe-native promo codes enabled via allow_promotion_codes
 // -----------------------------------------------------------------
 
 /**
@@ -42,9 +41,8 @@ export default async function handler(
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
   try {
-    const { items, promoCode } = req.body as {
+    const { items } = req.body as {
       items?: { id: string; quantity: number }[];
-      promoCode?: string;
     };
 
     if (!items || items.length === 0) {
@@ -106,59 +104,47 @@ export default async function handler(
       });
     }
 
-    // 4. Resolve the promo via OrderCloud Promotions API
-    const promotion = promoCode ? await resolveOcPromotion(promoCode) : null;
-
     // 5. Build Stripe line items from OC order line items
     const line_items: Stripe.Checkout.SessionCreateParams["line_items"] =
       lineItems.Items.map((li) => {
-        // UnitPrice is the authoritative price from OC (in dollars)
         const priceInCents = Math.round((li.UnitPrice ?? 0) * 100);
-        const unitAmount = promotion
-          ? Math.round(priceInCents * (1 - promotion.percentOff / 100))
-          : priceInCents;
 
         return {
           price_data: {
             currency: "usd",
-            unit_amount: unitAmount,
+            unit_amount: priceInCents,
             product_data: {
               name: li.Product?.Name ?? li.ProductID ?? "Product",
               metadata: {
                 ocProductId: li.ProductID ?? "",
                 ocLineItemId: li.ID ?? "",
               },
-              ...(promotion && {
-                description: `${promotion.percentOff}% off applied (${promotion.description})`,
-              }),
             },
           },
           quantity: li.Quantity ?? 1,
         };
       });
 
-    // 6. Build session params — include OC order ID in metadata
+    // 6. Build session params — always enable Stripe-native promo codes
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       line_items,
+      allow_promotion_codes: true,
       success_url: `${appUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/checkout/cancel`,
-      metadata: {
-        ocOrderId: orderId,
-        ...(promotion && {
-          promoCode: promotion.code,
-          promoDescription: promotion.description,
-          promoPercentOff: String(promotion.percentOff),
-        }),
-      },
+      metadata: {},
     };
 
-    // If no promo entered in our cart, allow Stripe-native promo codes
-    if (!promotion) {
-      sessionParams.allow_promotion_codes = true;
-    }
-
     const session = await stripe.checkout.sessions.create(sessionParams);
+
+    // Clean up the temporary OC cart order — it was only used for pricing.
+    // The fulfillment webhook creates the real order.
+    try {
+      await Orders.Delete("Outgoing", orderId);
+    } catch {
+      // Non-critical — orphan order is harmless, just noisy
+      console.warn("[create-checkout-session] Failed to delete cart order:", orderId);
+    }
 
     return res.status(200).json({ sessionId: session.id, url: session.url });
   } catch (err) {
