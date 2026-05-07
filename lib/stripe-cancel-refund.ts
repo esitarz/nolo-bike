@@ -2,12 +2,25 @@ import Stripe from "stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
+type ExpireResult =
+  | { action: "none"; reason: string }
+  | { action: "expired"; sessionId: string };
+
+type RefundResult = {
+  action: "refunded";
+  refundId: string;
+  status: string | null;
+  amount: number;
+};
+
+export type CancelResult = ExpireResult | RefundResult;
+
 /**
  * Expire a Checkout Session that has not been completed yet.
  * Use when the cart changes or the customer abandons checkout.
  * Only works while session.status === "open".
  */
-export async function expireCheckoutSession(sessionId: string) {
+export async function expireCheckoutSession(sessionId: string): Promise<ExpireResult> {
   const session = await stripe.checkout.sessions.retrieve(sessionId);
   if (session.status !== "open") {
     return { action: "none", reason: `Session status is "${session.status}"` };
@@ -28,7 +41,7 @@ export async function refundCheckoutSession(
   sessionId: string,
   amountCents?: number,
   reason?: Stripe.RefundCreateParams.Reason,
-) {
+): Promise<RefundResult> {
   const session = await stripe.checkout.sessions.retrieve(sessionId);
   const paymentIntentId = session.payment_intent;
 
@@ -48,7 +61,7 @@ export async function refundCheckoutSession(
   return {
     action: "refunded",
     refundId: refund.id,
-    status: refund.status,
+    status: refund.status ?? "pending",
     amount: refund.amount,
   };
 }

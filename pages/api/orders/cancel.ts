@@ -75,20 +75,19 @@ export default async function handler(
     await Orders.Cancel("Outgoing", ocOrderId);
 
     // 5. Record refund metadata in OC order xp
+    const xpData: Record<string, any> = {
+      canceledAt: new Date().toISOString(),
+      cancelAction: stripeResult.action,
+    };
+
+    if (stripeResult.action === "refunded") {
+      xpData.stripeRefundId = stripeResult.refundId;
+      xpData.stripeRefundStatus = stripeResult.status;
+      xpData.stripeRefundAmountCents = stripeResult.amount;
+    }
+
     await Orders.Patch("Outgoing", ocOrderId, {
-      xp: {
-        canceledAt: new Date().toISOString(),
-        stripeRefundId: stripeResult.action === "refunded"
-          ? stripeResult.refundId
-          : null,
-        stripeRefundStatus: stripeResult.action === "refunded"
-          ? stripeResult.status
-          : null,
-        stripeRefundAmountCents: stripeResult.action === "refunded"
-          ? stripeResult.amount
-          : null,
-        cancelAction: stripeResult.action,
-      },
+      xp: xpData,
     });
 
     return res.status(200).json({
